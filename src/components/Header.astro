@@ -1,0 +1,33 @@
+---
+import Logo from '../components/Logo.astro';
+
+const navItems = [
+    { linkText: '最新日況', href: '/table_daily' },
+    { linkText: '常用報表', href: '/table' },
+    { linkText: '常用網頁', href: '/website' },
+];
+---
+
+<nav class="flex flex-wrap items-center gap-4 pt-6 pb-16 sm:pt-12 sm:pb-24">
+    <a >
+        <Logo />
+    </a>
+    {
+        !!navItems?.length && (
+            <ul class="flex flex-wrap gap-x-4 gap-y-1 items-center">
+                {navItems.map((item) => (
+                    <li>
+                        <a href={item.href} class="inline-block px-1.5 py-1 sm:px-3 sm:py-2">
+                            {item.linkText}
+                        </a>
+                    </li>
+                ))}
+                <li>
+                    <button id="theme-toggle" class="px-2 py-1 text-sm border rounded dark:border-white border-black">
+                        🌗 主題
+                    </button>
+                </li>
+            </ul>
+        )
+    }
+</nav>

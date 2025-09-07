@@ -1,0 +1,602 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="資料表格">
+    <div class="container mx-auto px-4 py-8 bg-gray-900 text-white min-h-screen">
+        <div id="tables-container" class="grid grid-cols-1 gap-6 mb-6">
+            <!-- 選中的表格將在此顯示 -->
+            <div class="bg-gray-800 p-6 rounded-lg text-center">
+                <p class="text-gray-400">請選擇上方按鈕來查看對應的資料表格</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 預先載入本地的 pako 庫 -->
+    <script is:inline src="/libs/pako.min.js"></script>
+
+    <script is:inline>
+        // 全局變量
+        let tableData = null;
+        // 儲存原始表格數據
+        let allTablesData = {};
+
+        // 載入表格配置
+        async function loadTableData() {
+            try {
+                const response = await fetch('/table_daily.json');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                tableData = await response.json();
+                if (!Array.isArray(tableData)) {
+                    throw new Error("讀取到的 tableData 不是陣列格式");
+                    }
+
+                await loadTables(tableData);  // ✅ 直接載入全部表格
+            } catch (error) {
+                console.error('載入表格配置時發生錯誤:', error);
+                showError(`載入表格配置時發生錯誤：${error.message}`);
+            }
+        }
+
+        // 顯示錯誤消息
+        function showError(message) {
+            const container = document.getElementById('tables-container');
+            container.innerHTML = '';
+
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'bg-red-800 text-white p-4 rounded-lg';
+            errorDiv.textContent = message;
+            container.appendChild(errorDiv);
+        }
+
+
+        // 載入表格數據
+        async function loadTables(tables) {
+            const container = document.getElementById('tables-container');
+            container.innerHTML = '';
+
+            // 創建加載指示器
+            const loadingIndicator = document.createElement('div');
+            loadingIndicator.className = 'text-center py-4';
+            loadingIndicator.innerHTML = '<span class="inline-block animate-spin mr-2">⟳</span> 載入資料中...';
+            container.appendChild(loadingIndicator);
+
+            try {
+                // 嘗試檢測 pako 是否可用
+                let pakoAvailable = false;
+                try {
+                    pakoAvailable = typeof pako !== 'undefined' && typeof pako.inflate === 'function';
+                    console.log('Pako 庫狀態:', pakoAvailable ? '已載入' : '未載入或不可用');
+                } catch (e) {
+                    console.warn('檢測 Pako 庫時發生錯誤:', e);
+                }
+
+                // 處理每個表格
+                for (const table of tables) {
+                    try {
+                        console.log(`開始載入表格: ${table.name}, 文件: ${table.file}`);
+
+                        // 獲取CSV資料 - 只獲取一次響應，然後根據需要使用不同的方法
+                        const csvResponse = await fetch(table.file);
+                        if (!csvResponse.ok) {
+                            throw new Error(`無法載入 ${table.file}: ${csvResponse.status}`);
+                        }
+
+                        let csvData;
+                        // 檢查是否是壓縮文件
+                        const isCompressed = table.file.endsWith('.gz');
+
+                        if (isCompressed) {
+                            console.log(`${table.file} 是壓縮文件，嘗試解壓縮...`);
+
+                            if (!pakoAvailable) {
+                                throw new Error('Pako 庫未載入或不可用，無法解壓縮 .gz 文件。請確認 /libs/pako.min.js 文件是否存在且完整。');
+                            }
+
+                            try {
+                                // 解壓縮gzip並解析CSV - 使用arrayBuffer()
+                                const arrayBuffer = await csvResponse.arrayBuffer();
+                                console.log(`獲取到 ${table.file} 數據，大小: ${arrayBuffer.byteLength} 字節`);
+
+                                // 先檢查文件是否有效
+                                if (arrayBuffer.byteLength === 0) {
+                                    throw new Error('文件大小為0，無法解壓縮');
+                                }
+
+                                // 嘗試解壓縮
+                                const uint8Array = new Uint8Array(arrayBuffer);
+                                // 檢查文件頭，確認是否是有效的gzip文件 (gzip 文件頭為 0x1f 0x8b)
+                                if (uint8Array[0] !== 0x1f || uint8Array[1] !== 0x8b) {
+                                    console.warn('警告: 文件可能不是標準gzip格式，將嘗試直接解析');
+                                    const textData = new TextDecoder().decode(arrayBuffer);
+                                    csvData = parseCSV(textData);
+                                } else {
+                                    console.log('開始解壓縮...');
+                                    try {
+                                        const decompressedData = pako.inflate(uint8Array, { to: 'string' });
+                                        console.log(`解壓縮完成，數據長度: ${decompressedData.length}`);
+                                        csvData = parseCSV(decompressedData);
+                                    } catch (inflateError) {
+                                        console.error('解壓縮失敗，將嘗試直接解析文件:', inflateError);
+                                        const textData = new TextDecoder().decode(arrayBuffer);
+                                        csvData = parseCSV(textData);
+                                    }
+                                }
+                            } catch (compressionError) {
+                                console.error('處理壓縮文件時發生錯誤:', compressionError);
+                                throw new Error(`解壓縮或解析文件失敗: ${compressionError.message}`);
+                            }
+                        } else {
+                            // 直接解析CSV (如果不是壓縮文件) - 使用text()
+                            console.log(`${table.file} 不是壓縮文件，直接解析...`);
+                            //const textData = await csvResponse.text();
+                            const arrayBuffer = await csvResponse.arrayBuffer();
+                            // const textData = new TextDecoder('big5').decode(arrayBuffer); // 如果來源是 Big5
+                            const textData = new TextDecoder().decode(arrayBuffer); // 如果來源是 Big5
+
+
+                            csvData = parseCSV(textData);
+                        }
+
+                        console.log(`成功解析 ${table.name}, 行數: ${csvData.length}, 列數: ${csvData[0]?.length || 0}`);
+
+                        // 保存原始數據到全局對象中，用於後續排序和篩選
+                        allTablesData[table.name] = csvData;
+
+                        // 創建表格區段
+                        const tableSection = document.createElement('div');
+                        tableSection.className = 'category bg-gray-800 rounded-lg p-4 mb-6';
+                        tableSection.id = `table-section-${table.name.replace(/\s+/g, '-').toLowerCase()}`;
+
+                        // 創建標題
+                        const tableTitle = document.createElement('h2');
+                        tableTitle.className = 'text-xl font-bold mb-2 text-white';
+                        tableTitle.textContent = table.name;
+                        tableSection.appendChild(tableTitle);
+
+                        // 創建說明文字（如果有）
+                        if (table.description) {
+                            const tableDesc = document.createElement('p');
+                            tableDesc.className = 'text-gray-300 mb-4 text-sm';
+                            tableDesc.textContent = table.description;
+                            tableSection.appendChild(tableDesc);
+                        }
+
+                        // 創建表格元素
+                        const tableElement = document.createElement('div');
+                        tableElement.className = 'overflow-x-auto max-h-[600px] overflow-y-auto';
+                        tableElement.id = `table-container-${table.name.replace(/\s+/g, '-').toLowerCase()}`;
+
+                        // 創建表格HTML
+                        const tableHTML = createTableHTML(csvData, table.name);
+                        tableElement.innerHTML = tableHTML;
+
+                        tableSection.appendChild(tableElement);
+                        container.appendChild(tableSection);
+
+                        // 為表格頭部添加排序事件監聽器
+                        addSortListeners(table.name);
+                    } catch (tableError) {
+                        console.error(`載入表格 ${table.name} 時發生錯誤:`, tableError);
+
+                        const errorTable = document.createElement('div');
+                        errorTable.className = 'bg-red-800 text-white p-4 rounded-lg mb-4';
+                        errorTable.textContent = `載入表格 ${table.name} 時發生錯誤：${tableError.message}`;
+                        container.appendChild(errorTable);
+                    }
+                }
+            } catch (error) {
+                showError(`載入表格時發生錯誤：${error.message}`);
+            } finally {
+                // 移除加載指示器
+                if (container.contains(loadingIndicator)) {
+                    container.removeChild(loadingIndicator);
+                }
+
+                // 如果沒有表格或所有表格載入失敗
+                if (container.children.length === 0 || (container.children.length === 1 && container.children[0] === loadingIndicator)) {
+                    const noDataDiv = document.createElement('div');
+                    noDataDiv.className = 'bg-gray-800 p-6 rounded-lg text-center';
+                    noDataDiv.innerHTML = '<p class="text-gray-400">此類別沒有可用的資料表格或所有表格載入失敗</p>';
+                    container.appendChild(noDataDiv);
+                }
+            }
+        }
+
+        // 套用篩選
+        function applyFilter(tableName) {
+            const safeTableName = tableName.replace(/\s+/g, '-').toLowerCase();
+            const fieldIndex = parseInt(document.getElementById(`field-select-${safeTableName}`).value);
+            const condition = document.getElementById(`condition-select-${safeTableName}`).value;
+            const filterValue = document.getElementById(`value-input-${safeTableName}`).value;
+
+            const originalData = allTablesData[tableName];
+            if (!originalData || originalData.length <= 1) return;
+
+            // 表頭行
+            const headers = originalData[0];
+
+            // 篩選數據行
+            const filteredData = [headers];
+
+            for (let i = 1; i < originalData.length; i++) {
+                const row = originalData[i];
+                if (row.length <= fieldIndex) continue;
+
+                const cellValue = row[fieldIndex];
+
+                let includeRow = false;
+                switch (condition) {
+                    case 'contains':
+                        includeRow = cellValue.toString().includes(filterValue);
+                        break;
+                    case 'notContains':
+                        includeRow = !cellValue.toString().includes(filterValue);
+                        break;
+                    case 'equals':
+                        includeRow = cellValue.toString() === filterValue;
+                        break;
+                    case 'notEquals':
+                        includeRow = cellValue.toString() !== filterValue;
+                        break;
+                    case 'startsWith':
+                        includeRow = cellValue.toString().startsWith(filterValue);
+                        break;
+                    case 'endsWith':
+                        includeRow = cellValue.toString().endsWith(filterValue);
+                        break;
+                    case 'greaterThan':
+                        includeRow = parseFloat(cellValue) > parseFloat(filterValue);
+                        break;
+                    case 'lessThan':
+                        includeRow = parseFloat(cellValue) < parseFloat(filterValue);
+                        break;
+                    default:
+                        includeRow = true;
+                }
+
+                if (includeRow) {
+                    filteredData.push(row);
+                }
+            }
+
+            // 更新表格
+            const tableContainer = document.getElementById(`table-container-${safeTableName}`);
+            tableContainer.innerHTML = createTableHTML(filteredData, tableName);
+
+            // 重新添加排序監聽器
+            addSortListeners(tableName);
+
+            // 顯示篩選結果信息
+            const filterInfo = document.createElement('div');
+            filterInfo.className = 'text-xs text-gray-400 mt-2';
+            filterInfo.textContent = `顯示 ${filteredData.length - 1} 筆結果，共 ${originalData.length - 1} 筆資料`;
+
+            const existingInfo = tableContainer.querySelector('.filter-info');
+            if (existingInfo) {
+                tableContainer.removeChild(existingInfo);
+            }
+
+            filterInfo.classList.add('filter-info');
+            tableContainer.appendChild(filterInfo);
+        }
+
+        // 重置篩選
+        function resetFilter(tableName) {
+            const safeTableName = tableName.replace(/\s+/g, '-').toLowerCase();
+
+            // 清空篩選值
+            document.getElementById(`value-input-${safeTableName}`).value = '';
+
+            // 恢復原始數據
+            const originalData = allTablesData[tableName];
+            const tableContainer = document.getElementById(`table-container-${safeTableName}`);
+            tableContainer.innerHTML = createTableHTML(originalData, tableName);
+
+            // 重新添加排序監聽器
+            addSortListeners(tableName);
+
+            // 移除篩選信息
+            const existingInfo = tableContainer.querySelector('.filter-info');
+            if (existingInfo) {
+                tableContainer.removeChild(existingInfo);
+            }
+        }
+
+        // 添加排序事件監聽器
+        function addSortListeners(tableName) {
+            const safeTableName = tableName.replace(/\s+/g, '-').toLowerCase();
+            const tableId = `table-${safeTableName}`;
+            const table = document.getElementById(tableId);
+
+            if (!table) return;
+
+            const headers = table.querySelectorAll('th');
+            headers.forEach((header, index) => {
+                if (!header.classList.contains('sort-header')) {
+                    header.classList.add('sort-header', 'cursor-pointer', 'select-none');
+
+                    // 添加排序圖標容器
+                    const sortIconSpan = document.createElement('span');
+                    sortIconSpan.className = 'sort-icon ml-1 text-gray-500 inline-block';
+                    sortIconSpan.innerHTML = '↕'; // 預設排序圖標
+                    header.appendChild(sortIconSpan);
+
+                    header.addEventListener('click', () => {
+                        sortTable(tableName, index);
+                    });
+                }
+            });
+        }
+
+        // 排序表格
+        function sortTable(tableName, columnIndex) {
+            const safeTableName = tableName.replace(/\s+/g, '-').toLowerCase();
+            const tableId = `table-${safeTableName}`;
+            const table = document.getElementById(tableId);
+
+            if (!table) return;
+
+            const headers = table.querySelectorAll('th');
+            const currentHeader = headers[columnIndex];
+
+            // 確定排序方向
+            let sortDirection = 'asc';
+            if (currentHeader.getAttribute('data-sort-direction') === 'asc') {
+                sortDirection = 'desc';
+            }
+
+            // 更新所有表頭的排序圖標
+            headers.forEach((header) => {
+                const icon = header.querySelector('.sort-icon');
+                if (icon) {
+                    icon.innerHTML = '↕';
+                    icon.classList.remove('text-blue-500');
+                    icon.classList.add('text-gray-500');
+                }
+                header.setAttribute('data-sort-direction', '');
+            });
+
+            // 更新當前表頭的排序圖標
+            const sortIcon = currentHeader.querySelector('.sort-icon');
+            if (sortIcon) {
+                sortIcon.innerHTML = sortDirection === 'asc' ? '↑' : '↓';
+                sortIcon.classList.remove('text-gray-500');
+                sortIcon.classList.add('text-blue-500');
+            }
+            currentHeader.setAttribute('data-sort-direction', sortDirection);
+
+            // 獲取表格數據
+            const data = [...allTablesData[tableName]];
+            if (data.length <= 1) return; // 只有表頭行或沒有數據
+
+            // 表頭行
+            const headers_row = data[0];
+
+            // 數據行
+            const rows = data.slice(1);
+
+            // 排序數據行
+            rows.sort((a, b) => {
+                let valueA = a[columnIndex];
+                let valueB = b[columnIndex];
+
+                // 嘗試數字排序
+                const numA = parseFloat(valueA);
+                const numB = parseFloat(valueB);
+
+                if (!isNaN(numA) && !isNaN(numB)) {
+                    return sortDirection === 'asc' ? numA - numB : numB - numA;
+                }
+
+                // 字符串排序
+                valueA = valueA.toString().toLowerCase();
+                valueB = valueB.toString().toLowerCase();
+
+                if (valueA < valueB) return sortDirection === 'asc' ? -1 : 1;
+                if (valueA > valueB) return sortDirection === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            // 組合排序後的數據
+            const sortedData = [headers_row, ...rows];
+
+            // 更新表格
+            const tableContainer = document.getElementById(`table-container-${safeTableName}`);
+
+            // 保存篩選信息
+            const filterInfo = tableContainer.querySelector('.filter-info');
+
+            tableContainer.innerHTML = createTableHTML(sortedData, tableName);
+
+            // 恢復篩選信息
+            if (filterInfo) {
+                tableContainer.appendChild(filterInfo);
+            }
+
+            // 重新添加排序監聽器
+            addSortListeners(tableName);
+
+            // 恢復排序圖標狀態
+            const newTable = document.getElementById(tableId);
+            const newHeaders = newTable.querySelectorAll('th');
+            const newCurrentHeader = newHeaders[columnIndex];
+            const newSortIcon = newCurrentHeader.querySelector('.sort-icon');
+
+            if (newSortIcon) {
+                newSortIcon.innerHTML = sortDirection === 'asc' ? '↑' : '↓';
+                newSortIcon.classList.remove('text-gray-500');
+                newSortIcon.classList.add('text-blue-500');
+            }
+            newCurrentHeader.setAttribute('data-sort-direction', sortDirection);
+        }
+
+        // 解析CSV數據
+        function parseCSV(csvText) {
+            if (!csvText) {
+                throw new Error('CSV文本為空，無法解析');
+            }
+
+            const lines = csvText.split('\n');
+            return lines
+                .filter((line) => line.trim() !== '') // 過濾空行
+                .map((line) => {
+                    // 處理可能的CSV格式，考慮引號內的逗號
+                    const result = [];
+                    let inQuotes = false;
+                    let currentStr = '';
+
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+
+                        if (char === '"' && (i === 0 || line[i - 1] !== '\\')) {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            result.push(currentStr.trim());
+                            currentStr = '';
+                        } else {
+                            currentStr += char;
+                        }
+                    }
+
+                    // 添加最後一個值
+                    result.push(currentStr.trim());
+                    return result;
+                });
+        }
+
+        // 創建表格HTML
+        function createTableHTML(data, tableName) {
+            if (!data || data.length === 0) {
+                return '<p class="text-gray-400">沒有可用的數據</p>';
+            }
+
+            const safeTableName = tableName.replace(/\s+/g, '-').toLowerCase();
+
+            let html = `
+                <table id="table-${safeTableName}" class="min-w-full bg-gray-700 border border-gray-600 rounded-lg">
+                    <thead class="bg-gray-800">
+                        <tr>
+            `;
+
+            // 添加表頭
+            data[0].forEach((header) => {
+                html += `<th class="py-2 px-3 text-left text-sm font-medium text-gray-300 uppercase tracking-wider border-b border-gray-600">${header}</th>`;
+            });
+
+            html += `
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-600">
+            `;
+
+            // 添加表格數據行
+            for (let i = 1; i < data.length; i++) {
+                if (data[i].length === 0) continue; // 跳過空行
+
+                html += `<tr class="${i % 2 === 0 ? 'bg-gray-750' : 'bg-gray-700'} hover:bg-gray-650 transition">`;
+
+                data[i].forEach((cell, cellIndex) => {
+                    // 對數字單元格右對齊，非數字左對齊
+                    const isNumeric = !isNaN(parseFloat(cell)) && isFinite(cell);
+                    const alignment = isNumeric ? 'text-right' : 'text-left';
+
+                    html += `<td class="py-2 px-3 text-sm text-gray-200 ${alignment} border-r border-gray-600 last:border-r-0">${cell}</td>`;
+                });
+
+                html += `</tr>`;
+            }
+
+            html += `
+                    </tbody>
+                </table>
+            `;
+
+            return html;
+        }
+
+        // 頁面載入時執行
+        document.addEventListener('DOMContentLoaded', loadTableData);
+    </script>
+
+    <style is:inline>
+        table th:first-child,
+            table td:first-child {
+                min-width: 120px;
+                max-width: 160px;
+                white-space: normal;
+                word-break: break-word;
+            }
+        /* 添加一些額外的樣式 */
+        .sort-header:hover {
+            background-color: rgba(75, 85, 99, 0.5);
+        }
+
+        .bg-gray-750 {
+            background-color: rgba(55, 65, 81, 0.8);
+        }
+
+        .bg-gray-650 {
+            background-color: rgba(75, 85, 99, 0.7);
+        }
+
+        .cursor-pointer {
+            cursor: pointer;
+        }
+
+        .select-none {
+            user-select: none;
+        }
+
+        /* 添加篩選控件的樣式 */
+        input:focus,
+        select:focus {
+            outline: none;
+            border-color: rgba(59, 130, 246, 0.5);
+            box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3);
+        }
+
+        /* 表格滾動條樣式 */
+        .overflow-x-auto::-webkit-scrollbar {
+            height: 8px;
+        }
+
+        .overflow-x-auto::-webkit-scrollbar-track {
+            background: rgba(31, 41, 55, 0.5);
+            border-radius: 4px;
+        }
+
+        .overflow-x-auto::-webkit-scrollbar-thumb {
+            background: rgba(75, 85, 99, 0.8);
+            border-radius: 4px;
+        }
+
+        .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+            background: rgba(107, 114, 128, 0.8);
+        }
+                /* 凍結首行 */
+        table thead th {
+            position: sticky;
+            top: 0;
+            background-color: #1f2937; /* 深灰背景，避免滾動重疊不清楚 */
+            z-index: 10;
+        }
+
+        /* 凍結首列（所有欄位的第一個 <td> 和 <th>） */
+        table tr td:first-child,
+        table thead th:first-child {
+            position: sticky;
+            left: 0;
+            background-color: #1f2937;
+            z-index: 9;
+        }
+
+        /* 當第一列和第一欄交集時要最上層（角落交界） */
+        table thead th:first-child {
+            z-index: 11;
+        }
+    </style>
+</Layout>

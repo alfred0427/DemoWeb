@@ -1,0 +1,16 @@
+# 忽略 node.js 套件
+node_modules/
+
+# 忽略環境設定
+.env
+.env.*.local
+
+# 忽略 build 結果
+dist/
+build/
+
+# VSCode 設定檔
+.vscode/
+
+# Mac 系統檔案
+.DS_Store
