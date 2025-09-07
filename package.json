@@ -1,0 +1,19 @@
+{
+  "name": "demoweb",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "devDependencies": {
+    "astro": "^4.0.0",
+    "tailwindcss": "^4.1.13"
+  },
+  "engines": {
+    "node": ">=18.14.1"
+  }
+}
